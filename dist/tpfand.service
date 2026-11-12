@@ -13,4 +13,7 @@ StateDirectory=tpfand
 # same if it ever dies without cleaning up.
 
 [Install]
-WantedBy=multi-user.target
+# power-profiles-daemon orders itself after multi-user.target, so being
+# wanted by multi-user.target while After= it is a cycle systemd breaks by
+# dropping tpfand.
+WantedBy=graphical.target

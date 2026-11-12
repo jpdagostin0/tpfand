@@ -173,7 +173,9 @@ impl ksni::Tray for Tray {
 
 pub fn run() {
     let tray = Tray { status: None, error: None, window: None, quit: false };
-    let handle = match tray.spawn() {
+    // Autostart can race the AppIndicator extension registering the
+    // StatusNotifierWatcher; let ksni wait for it instead of exiting.
+    let handle = match tray.assume_sni_available(true).spawn() {
         Ok(h) => h,
         Err(e) => {
             eprintln!("tpfand-panel: cannot create tray icon: {e}");
