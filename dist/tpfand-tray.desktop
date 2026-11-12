@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=tpfand tray
+Comment=Tray icon for tpfand
+Exec=tpfand-panel
+Icon=power-profile-balanced-symbolic
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

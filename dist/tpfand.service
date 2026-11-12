@@ -1,0 +1,16 @@
+[Unit]
+Description=tpfand - ThinkPad profile-aware fan curve and power limits
+After=power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tpfand run
+Restart=on-failure
+RestartSec=2
+StateDirectory=tpfand
+# On stop the daemon hands the fan back to the EC; the EC watchdog does the
+# same if it ever dies without cleaning up.
+
+[Install]
+WantedBy=multi-user.target

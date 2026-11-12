@@ -1,0 +1,72 @@
+# tpfand configuration — installed to /etc/tpfand.toml
+#
+# The active profile is read from /sys/firmware/acpi/platform_profile, which
+# power-profiles-daemon (GNOME's Power Mode menu) sets.
+#   low-power   = "Power Saver"
+#   balanced    = "Balanced"
+#   performance = "Performance"
+#
+# Fan levels are thinkpad_acpi levels 0-7 (0 = off, 7 = fastest regulated).
+# Above `critical_temp` the fan is switched to "full-speed" (disengaged),
+# which is faster than level 7, regardless of profile.
+
+interval_ms = 1000
+
+# Smoothing time constants (seconds). Rising temps are smoothed over a few
+# seconds so short compile bursts don't spin the fan up and down; falling
+# temps are smoothed slower so the fan doesn't drop off too fast.
+rise_tau_s = 6.0
+fall_tau_s = 10.0
+
+# Fan steps down only once the temperature is `hysteresis` °C below the
+# threshold and the current level has been held for `min_hold_s` seconds.
+hysteresis = 5.0
+min_hold_s = 12.0
+
+# Emergency -> full-speed (any profile / fan mode) when the *smoothed* temp
+# is >= critical_temp for `critical_samples` consecutive samples, or any raw
+# reading hits critical_instant. Released once smoothed < critical_release.
+# (Core Ultra chips briefly hit ~100°C on single-core boosts at low power;
+# raw spikes alone shouldn't blast the fan.)
+critical_temp = 94.0
+critical_instant = 106.0
+critical_release = 85.0
+critical_samples = 3
+
+# EC watchdog (seconds): if tpfand dies, the EC returns the fan to auto.
+watchdog_s = 20
+
+# How often (seconds) to re-check that firmware hasn't reset the power limits.
+rapl_recheck_s = 10.0
+
+# Allowed range for power limits set from the panel (watts).
+limit_min_w = 5
+limit_max_w = 140
+
+# Members of this group (and root) may change settings over the socket.
+# Anyone can read status.
+allow_group = "sudo"
+
+# Persisted panel choices (mode, fan mode, limit overrides).
+state_file = "/var/lib/tpfand/state.json"
+
+# Curves: [temperature °C, fan level] — level applies at/above the temp.
+# pl1_w = sustained package power, pl2_w = short-term turbo power (watts).
+
+[profiles.low-power]
+# Quiet: browsing, notes, editing, light builds.
+pl1_w = 15
+pl2_w = 30
+curve = [[0, 0], [58, 1], [68, 2], [76, 3], [83, 5], [90, 7]]
+
+[profiles.balanced]
+# Everyday: class, coding, normal compiles without being loud.
+pl1_w = 45
+pl2_w = 80
+curve = [[0, 0], [52, 1], [62, 2], [70, 3], [77, 4], [83, 6], [89, 7]]
+
+[profiles.performance]
+# Plugged in, heavy builds / ML: max power, aggressive cooling.
+pl1_w = 115
+pl2_w = 115
+curve = [[0, 1], [45, 2], [55, 3], [63, 4], [70, 5], [76, 6], [80, 7]]

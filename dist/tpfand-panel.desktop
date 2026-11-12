@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=tpfand
+Comment=Thermal profile, fan and power limit controls
+Exec=tpfand-panel --window
+Icon=power-profile-balanced-symbolic
+Categories=Settings;HardwareSettings;
+Keywords=fan;thermal;tdp;power;
+StartupWMClass=tpfand-panel

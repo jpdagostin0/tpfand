@@ -1,0 +1,10 @@
+[package]
+name = "tpfand-panel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.37.0"
+ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] }
+serde_json = "1.0.154"
+tpfand-proto = { version = "0.1.0", path = "../tpfand-proto" }
