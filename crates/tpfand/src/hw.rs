@@ -23,9 +23,30 @@ fn read_u64(p: &Path) -> Option<u64> {
 
 // ---------------------------------------------------------------- sensors --
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    /// Hottest core (spikes to ~100°C on single-core boost; safety only).
+    Peak,
+    /// Per-core reading, averaged into the control temperature.
+    Core,
+    /// Counts directly toward the control temperature (shared heatsink).
+    Control,
+    /// Shown in status only.
+    Info,
+}
+
 pub struct Sensors {
-    pub inputs: Vec<(String, PathBuf)>,
+    inputs: Vec<(String, Kind, PathBuf)>,
     pub fans: Vec<PathBuf>,
+}
+
+pub struct Readings {
+    /// What gets shown to the user.
+    pub display: Vec<(String, f64)>,
+    /// Drives fan curves + dynamic boost: max(avg of cores, dGPU).
+    pub control: Option<f64>,
+    /// Hottest reading of anything (critical_instant check).
+    pub peak: Option<f64>,
 }
 
 impl Sensors {
@@ -39,15 +60,17 @@ impl Sensors {
                 "coretemp" => {
                     for (label, input) in labelled_temps(&dir) {
                         if label.starts_with("Package") {
-                            inputs.push(("CPU package".to_string(), input));
+                            inputs.push(("CPU hottest core".to_string(), Kind::Peak, input));
+                        } else if label.starts_with("Core") {
+                            inputs.push((label, Kind::Core, input));
                         }
                     }
                 }
                 "thinkpad" => {
                     for (label, input) in labelled_temps(&dir) {
                         match label.as_str() {
-                            "CPU" => inputs.push(("CPU (EC)".into(), input)),
-                            "GPU" => inputs.push(("GPU (EC)".into(), input)),
+                            "CPU" => inputs.push(("CPU (EC)".into(), Kind::Info, input)),
+                            "GPU" => inputs.push(("GPU".into(), Kind::Control, input)),
                             _ => {}
                         }
                     }
@@ -61,21 +84,60 @@ impl Sensors {
                 _ => {}
             }
         }
-        if inputs.is_empty() {
+        if !inputs.iter().any(|(_, k, _)| matches!(k, Kind::Core | Kind::Control | Kind::Peak)) {
             return Err("no coretemp/thinkpad temperature sensors found".into());
         }
         Ok(Sensors { inputs, fans })
     }
 
-    /// Valid readings only (unpowered dGPU / absent sensors report 0, 1, -128).
-    pub fn read(&self) -> Vec<(String, f64)> {
-        self.inputs
+    pub fn names(&self) -> String {
+        let cores = self.inputs.iter().filter(|(_, k, _)| *k == Kind::Core).count();
+        let mut v: Vec<String> = self
+            .inputs
             .iter()
-            .filter_map(|(l, p)| {
-                let t = read_trim(p).ok()?.parse::<f64>().ok()? / 1000.0;
-                (10.0..=125.0).contains(&t).then(|| (l.clone(), t))
-            })
-            .collect()
+            .filter(|(_, k, _)| *k != Kind::Core)
+            .map(|(l, _, _)| l.clone())
+            .collect();
+        v.push(format!("{cores} cores"));
+        v.join(", ")
+    }
+
+    /// Valid readings only (unpowered dGPU / absent sensors report 0, 1, -128).
+    pub fn read(&self) -> Readings {
+        let mut display = Vec::new();
+        let (mut core_sum, mut core_n) = (0.0, 0);
+        let mut control: Option<f64> = None;
+        let mut peak: Option<f64> = None;
+        for (label, kind, path) in &self.inputs {
+            let Some(t) = read_trim(path)
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|m| m / 1000.0)
+                .filter(|t| (10.0..=125.0).contains(t))
+            else {
+                continue;
+            };
+            peak = Some(peak.map_or(t, |p| p.max(t)));
+            match kind {
+                Kind::Core => {
+                    core_sum += t;
+                    core_n += 1;
+                }
+                Kind::Control => {
+                    control = Some(control.map_or(t, |c| c.max(t)));
+                    display.push((label.clone(), t));
+                }
+                Kind::Peak | Kind::Info => display.push((label.clone(), t)),
+            }
+        }
+        if core_n > 0 {
+            let avg = core_sum / core_n as f64;
+            display.insert(0, ("CPU core average".into(), avg));
+            control = Some(control.map_or(avg, |c| c.max(avg)));
+        }
+        // No per-core sensors at all: fall back to the peak.
+        let control = control.or(peak);
+        Readings { display, control, peak }
     }
 
     pub fn rpm(&self) -> Vec<u32> {

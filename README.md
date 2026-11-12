@@ -16,19 +16,23 @@ power-profiles-daemon sets — or a profile you pin from the panel, and applies:
 |-------------|-----------|-----------|
 | Power Saver | 15 / 30 W | off until 58°C, gentle ramp — browsing, notes, light coding |
 | Balanced    | 45 / 80 W | off until 52°C, moderate — class, coding, normal builds |
+| Dynamic Boost | 45 / 90 W base, up to 110 / 115 W | between Balanced and Performance |
 | Performance | 115 / 115 W | always on, level 7 by 80°C — heavy builds, ML |
 
 All values live in `/etc/tpfand.toml`.
 
 Fan control details:
 
-* Temperature = max of CPU package (coretemp) and the EC's CPU/GPU sensors.
-* Rising temps are smoothed over ~6 s so short compile bursts and single-core
-  boost spikes (Core Ultra jumps 50→100°C in a second at ~20 W) don't make
-  the fan spike; falling temps over ~10 s.
+* Control temperature = max(average of all CPU core temps, dGPU temp). The
+  hottest core is deliberately *not* used: Core Ultra parks one core at
+  ~100°C during single-threaded boost at ~20 W (e.g. one rustc), which says
+  nothing about heatsink load and would make the fan scream while compiling.
+* Rising temps are smoothed over ~6 s so short bursts don't spike the fan;
+  falling temps over ~10 s.
 * Fan only steps down when 5°C below the threshold and after holding a level
   for 12 s (no hunting).
-* **Critical**: smoothed temp ≥94°C for 3 s (or any raw reading ≥106°C) →
+* **Critical**: smoothed control temp ≥94°C for 3 s (or any single sensor
+  ≥106°C; TjMax is 110°C) →
   `full-speed` (disengaged, faster than level 7) in every profile and fan
   mode, until the smoothed temp drops below 85°C.
 * The EC watchdog is armed: if the daemon dies, the fan returns to firmware
@@ -36,13 +40,43 @@ Fan control details:
 * Firmware rewrites power limits when the platform profile changes; tpfand
   re-applies its own every 10 s.
 
+## Dynamic Boost
+
+tpfand's own power mode (pin it from the tray or panel; it isn't a system
+power mode, so Auto never selects it). It starts at the base limits and:
+
+* **boosts** PL1 (in proportional steps) while the CPU is actually
+  power-limited — package draw ≥85% of PL1 — and the control temp is under
+  the 85°C target;
+* **backs off** PL1 and trims the PL2 turbo budget at ≥89°C, and drops to
+  base on critical;
+* **decays** back to base after 15 s of light load, so the next burst starts
+  from a sane place and idle stays quiet;
+* **yields to the dGPU**: while the GPU is busy (≥20 W and ≥30% util, read
+  via NVML on a separate thread), the CPU gets at most
+  `total_budget_w − GPU draw` (130 W total by default), and if the GPU reports
+  thermal slowdown the CPU steps down further (to a 25 W floor) so the shared
+  heatsink has headroom for the GPU.
+
+The RTX's own power cap can't be raised from userspace on laptop GPUs
+(`nvidia-smi -pl` is refused, and NVIDIA's Dynamic Boost needs
+`nvidia-powerd`), so "boost" here means re-balancing the shared thermal
+budget, not exceeding the GPU's firmware cap. The panel shows the
+controller's state, CPU/GPU draw, and lets you edit both the base limits and
+the boost ceiling.
+
+Measured on a P1 Gen 7 (all-core load, system Power Mode = Performance):
+firmware Performance (115 W) hits 100°C and trips critical within ~15 s;
+Dynamic Boost settles around 45–50 W sustained at ~85–88°C with the fan at
+level 6–7 and never trips critical.
+
 ## Panel
 
 `tpfand-panel` puts a tray icon in the top bar (GNOME needs the AppIndicator
 extension, which Ubuntu ships):
 
 * **Auto** — follow the system power mode (default; falls back to it whenever
-  you unpin), or pin Power Saver / Balanced / Performance.
+  you unpin), or pin Power Saver / Balanced / Dynamic Boost / Performance.
 * Fan: profile curve, maximum, or firmware auto.
 * "Power limits & details…" opens an egui window with live temps, fan RPM,
   package power, and PL1/PL2 sliders per profile (apply / reset to default).

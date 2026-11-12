@@ -6,6 +6,12 @@
 #   balanced    = "Balanced"
 #   performance = "Performance"
 #
+# Temperatures: the "control temperature" used by fan curves, Dynamic Boost
+# and the critical check is max(average of all CPU core temps, dGPU temp).
+# The hottest single core is NOT used for that: Core Ultra parts park one core
+# at ~100°C during single-threaded boost at only ~20 W, which says nothing
+# about heatsink load. It's only used for critical_instant.
+#
 # Fan levels are thinkpad_acpi levels 0-7 (0 = off, 7 = fastest regulated).
 # Above `critical_temp` the fan is switched to "full-speed" (disengaged),
 # which is faster than level 7, regardless of profile.
@@ -23,11 +29,10 @@ fall_tau_s = 10.0
 hysteresis = 5.0
 min_hold_s = 12.0
 
-# Emergency -> full-speed (any profile / fan mode) when the *smoothed* temp
-# is >= critical_temp for `critical_samples` consecutive samples, or any raw
-# reading hits critical_instant. Released once smoothed < critical_release.
-# (Core Ultra chips briefly hit ~100°C on single-core boosts at low power;
-# raw spikes alone shouldn't blast the fan.)
+# Emergency -> full-speed (any profile / fan mode) when the smoothed control
+# temp is >= critical_temp for `critical_samples` consecutive samples, or the
+# hottest single sensor hits critical_instant (TjMax is 110°C). Released once
+# the smoothed control temp < critical_release.
 critical_temp = 94.0
 critical_instant = 106.0
 critical_release = 85.0
@@ -64,6 +69,33 @@ curve = [[0, 0], [58, 1], [68, 2], [76, 3], [83, 5], [90, 7]]
 pl1_w = 45
 pl2_w = 80
 curve = [[0, 0], [52, 1], [62, 2], [70, 3], [77, 4], [83, 6], [89, 7]]
+
+[profiles.dynamic]
+# Our own "Dynamic Boost": starts at the base limits below and raises CPU
+# power while the CPU is actually power-limited and there's thermal headroom,
+# backs off when hot, decays back to base when load goes away, and yields
+# power/thermal budget to the dGPU when it's busy (the RTX's own power cap
+# can't be raised from userspace on laptops). Pin it from the panel.
+pl1_w = 45
+pl2_w = 90
+curve = [[0, 0], [50, 1], [58, 2], [66, 3], [73, 4], [79, 5], [84, 6], [88, 7]]
+
+[profiles.dynamic.boost]
+max_pl1_w = 110         # boost ceiling (editable in the panel)
+max_pl2_w = 115
+min_pl1_w = 25          # never squeeze the CPU below this for the GPU
+target_temp = 85.0      # hold the smoothed temp around here while boosting
+temp_band = 4.0         # >= target + band: step down
+busy_ratio = 0.85       # package draw >= 85% of PL1 => CPU wants more power
+light_ratio = 0.4       # draw < 40% of PL1 ...
+decay_after_s = 15.0    # ... for this long => step back toward base
+step_up_w = 5.0
+step_down_w = 8.0
+interval_s = 2.0        # adjust at most this often
+total_budget_w = 130.0  # CPU + GPU combined when the GPU is busy
+gpu_active_w = 20.0     # GPU counts as busy above this draw ...
+gpu_active_util = 30.0  # ... and this utilization (%)
+gpu_burst_w = 20.0      # PL2 room above the shared ceiling
 
 [profiles.performance]
 # Plugged in, heavy builds / ML: max power, aggressive cooling.

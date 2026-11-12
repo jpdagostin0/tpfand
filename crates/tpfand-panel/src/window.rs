@@ -3,7 +3,7 @@
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
-use tpfand_proto::{Client, FanMode, Limits, PROFILES, Request, Status, profile_label};
+use tpfand_proto::{BoostInfo, Client, FanMode, Limits, PROFILES, Request, Status, profile_label};
 
 const LIMIT_MIN: u32 = 5;
 const LIMIT_MAX: u32 = 140;
@@ -13,7 +13,7 @@ pub fn run() -> Result<(), String> {
         viewport: egui::ViewportBuilder::default()
             .with_title("tpfand")
             .with_app_id("tpfand-panel")
-            .with_inner_size([440.0, 620.0])
+            .with_inner_size([470.0, 780.0])
             .with_min_inner_size([380.0, 420.0]),
         ..Default::default()
     };
@@ -28,11 +28,12 @@ struct Panel {
     last_poll: Option<Instant>,
     /// Slider values being edited, per profile.
     edits: BTreeMap<String, Limits>,
+    boost_edit: Option<Limits>,
 }
 
 impl Panel {
     fn new() -> Self {
-        Panel { client: None, status: None, error: None, last_poll: None, edits: BTreeMap::new() }
+        Panel { client: None, status: None, error: None, last_poll: None, edits: BTreeMap::new(), boost_edit: None }
     }
 
     fn with_client<T>(&mut self, f: impl FnOnce(&mut Client) -> std::io::Result<T>) -> Option<T> {
@@ -88,6 +89,68 @@ impl eframe::App for Panel {
 }
 
 impl Panel {
+    fn boost_section(&mut self, ui: &mut egui::Ui, s: &Status, b: &BoostInfo) {
+        ui.add_space(6.0);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(egui::RichText::new("Dynamic Boost").strong());
+            egui::Grid::new("boost").num_columns(2).spacing([16.0, 2.0]).show(ui, |ui| {
+                ui.label("State");
+                ui.label(&b.reason);
+                ui.end_row();
+                if let Some(a) = s.applied {
+                    ui.label("CPU limits now");
+                    ui.label(format!("PL1 {} W · PL2 {} W (ceiling {} W)", a.pl1_w, a.pl2_w, b.ceiling_w));
+                    ui.end_row();
+                }
+                if let Some(w) = b.cpu_watts {
+                    ui.label("CPU draw");
+                    ui.label(format!("{w:.1} W"));
+                    ui.end_row();
+                }
+                ui.label("GPU");
+                match b.gpu_watts {
+                    None => ui.label("no telemetry (treated as idle)"),
+                    Some(w) => {
+                        let mut t = format!("{w:.0} W · {}% util", b.gpu_util.unwrap_or(0));
+                        if let Some(c) = b.gpu_temp {
+                            t += &format!(" · {c:.0} °C");
+                        }
+                        if b.gpu_thermal_throttled {
+                            t += " · thermal throttling";
+                        } else if b.gpu_power_capped {
+                            t += " · at power cap";
+                        }
+                        ui.label(t)
+                    }
+                };
+                ui.end_row();
+            });
+
+            if let (Some(cur), def) = (s.boost_max, s.default_boost_max) {
+                let mut edit = self.boost_edit.unwrap_or(cur);
+                ui.add_space(4.0);
+                ui.label("Boost ceiling");
+                ui.add_enabled_ui(s.can_write, |ui| {
+                    ui.add(egui::Slider::new(&mut edit.pl1_w, LIMIT_MIN..=LIMIT_MAX).text("max PL1 W"));
+                    ui.add(egui::Slider::new(&mut edit.pl2_w, LIMIT_MIN..=LIMIT_MAX).text("max PL2 W"));
+                    edit.pl2_w = edit.pl2_w.max(edit.pl1_w);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(edit != cur, egui::Button::new("Apply")).clicked() {
+                            self.send(Request::SetBoostMax { limits: Some(edit) });
+                        }
+                        if ui.add_enabled(Some(cur) != def, egui::Button::new("Reset to default")).clicked() {
+                            self.send(Request::SetBoostMax { limits: None });
+                            if let Some(d) = def {
+                                edit = d;
+                            }
+                        }
+                    });
+                });
+                self.boost_edit = Some(edit);
+            }
+        });
+    }
+
     fn contents(&mut self, ui: &mut egui::Ui) {
         if let Some(e) = &self.error {
             ui.colored_label(egui::Color32::LIGHT_RED, e);
@@ -159,6 +222,16 @@ impl Panel {
             egui::RichText::new(format!("Applying: {}", profile_label(&s.effective_profile)))
                 .weak(),
         );
+        if s.effective_profile == "dynamic" && s.system_profile == "low-power" {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "System Power Mode is Power Saver, which caps CPU boost clocks — \
+                 set it to Balanced or Performance for Dynamic Boost to help.",
+            );
+        }
+        if let Some(b) = &s.boost {
+            self.boost_section(ui, &s, b);
+        }
 
         ui.separator();
 
@@ -196,11 +269,13 @@ impl Panel {
             let active = s.effective_profile == *p;
 
             ui.add_space(6.0);
-            let title = if active {
-                format!("{} (active)", profile_label(p))
-            } else {
-                profile_label(p).to_string()
-            };
+            let mut title = profile_label(p).to_string();
+            if *p == "dynamic" {
+                title += " — base";
+            }
+            if active {
+                title += " (active)";
+            }
             ui.label(egui::RichText::new(title).strong());
             ui.add_enabled_ui(s.can_write, |ui| {
                 ui.add(egui::Slider::new(&mut edit.pl1_w, LIMIT_MIN..=LIMIT_MAX).text("PL1 W"));

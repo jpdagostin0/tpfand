@@ -15,11 +15,14 @@ use tpfand_proto::{FanMode, Limits, Request, Response, SOCKET_PATH, Status};
 
 /// Choices made from the panel; persisted across restarts.
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(default)]
 pub struct UserState {
     /// None = auto (follow system power mode).
     pub mode: Option<String>,
     pub fan: FanMode,
     pub limits: BTreeMap<String, Limits>,
+    /// Dynamic-boost ceiling override.
+    pub boost_max: Option<Limits>,
 }
 
 impl UserState {
@@ -120,6 +123,12 @@ fn dispatch(req: Request, can_write: bool, cfg: &Config, shared: &SharedRef) -> 
             sh.user.mode = profile;
         }
         Request::SetFan { fan } => sh.user.fan = fan,
+        Request::SetBoostMax { limits } => {
+            if !cfg.profiles.values().any(|p| p.boost.is_some()) {
+                return Response::Error { message: "no dynamic profile configured".into() };
+            }
+            sh.user.boost_max = limits.map(|l| cfg.clamp(l));
+        }
         Request::SetLimits { profile, limits } => {
             if !cfg.profiles.contains_key(&profile) {
                 return Response::Error { message: format!("unknown profile '{profile}'") };

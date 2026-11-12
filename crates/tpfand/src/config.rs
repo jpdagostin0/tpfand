@@ -33,6 +33,9 @@ pub struct Config {
     pub profiles: BTreeMap<String, Profile>,
 }
 
+fn d_util() -> f64 {
+    30.0
+}
 fn d_instant() -> f64 {
     106.0
 }
@@ -54,6 +57,28 @@ pub struct Profile {
     pub pl1_w: u32,
     pub pl2_w: u32,
     pub curve: Vec<(f64, u8)>,
+    /// Present => this is a dynamic-boost profile; pl1_w/pl2_w are the base.
+    pub boost: Option<Boost>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Boost {
+    pub max_pl1_w: u32,
+    pub max_pl2_w: u32,
+    pub min_pl1_w: f64,
+    pub target_temp: f64,
+    pub temp_band: f64,
+    pub busy_ratio: f64,
+    pub light_ratio: f64,
+    pub decay_after_s: f64,
+    pub step_up_w: f64,
+    pub step_down_w: f64,
+    pub interval_s: f64,
+    pub total_budget_w: f64,
+    pub gpu_active_w: f64,
+    #[serde(default = "d_util")]
+    pub gpu_active_util: f64,
+    pub gpu_burst_w: f64,
 }
 
 impl Profile {

@@ -13,13 +13,15 @@ use std::time::Duration;
 pub const SOCKET_PATH: &str = "/run/tpfand.sock";
 
 /// Profile names, matching /sys/firmware/acpi/platform_profile.
-pub const PROFILES: &[&str] = &["low-power", "balanced", "performance"];
+/// "dynamic" is tpfand's own mode (not a platform profile); pin it to use it.
+pub const PROFILES: &[&str] = &["low-power", "balanced", "dynamic", "performance"];
 
 pub fn profile_label(p: &str) -> &str {
     match p {
         "low-power" => "Power Saver",
         "balanced" => "Balanced",
         "performance" => "Performance",
+        "dynamic" => "Dynamic Boost",
         other => other,
     }
 }
@@ -51,7 +53,26 @@ pub enum Request {
     SetMode { profile: Option<String> },
     SetFan { fan: FanMode },
     /// Override power limits for a profile; `limits: None` resets to config.
+    /// For the dynamic profile these are the *base* limits.
     SetLimits { profile: String, limits: Option<Limits> },
+    /// Override the dynamic profile's boost ceiling; `None` resets to config.
+    SetBoostMax { limits: Option<Limits> },
+}
+
+/// Live state of the dynamic-boost controller.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BoostInfo {
+    pub reason: String,
+    /// Current PL1 ceiling after GPU sharing.
+    pub ceiling_w: u32,
+    pub cpu_watts: Option<f64>,
+    pub gpu_watts: Option<f64>,
+    pub gpu_util: Option<u32>,
+    pub gpu_temp: Option<f64>,
+    pub gpu_thermal_throttled: bool,
+    /// GPU is pinned at its own (firmware-fixed) power cap.
+    #[serde(default)]
+    pub gpu_power_capped: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -87,6 +108,14 @@ pub struct Status {
     pub applied: Option<Limits>,
     /// Whether the connected client may change settings.
     pub can_write: bool,
+    /// Present while the dynamic profile is active.
+    #[serde(default)]
+    pub boost: Option<BoostInfo>,
+    /// Dynamic profile ceiling (effective / config default).
+    #[serde(default)]
+    pub boost_max: Option<Limits>,
+    #[serde(default)]
+    pub default_boost_max: Option<Limits>,
 }
 
 /// Blocking client.

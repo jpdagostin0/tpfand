@@ -5,13 +5,17 @@
 //! /proc/acpi/ibm/fan plus per-profile Intel RAPL package power limits.
 //! Forces full-speed at critical temperatures regardless of settings.
 
+mod boost;
 mod config;
 mod control;
+mod gpu;
 mod hw;
 mod ipc;
 
 use config::{Config, Res};
+use boost::Boost;
 use control::Controller;
+use gpu::{Gpu, GpuSample};
 use hw::{Fan, PowerMeter, Sensors};
 use ipc::{Shared, UserState};
 use std::collections::BTreeMap;
@@ -31,10 +35,7 @@ fn run(cfg: Config) -> Res<()> {
     }
     let cfg = Arc::new(cfg);
     let sensors = Sensors::discover()?;
-    eprintln!(
-        "tpfand: sensors: {}",
-        sensors.inputs.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join(", ")
-    );
+    eprintln!("tpfand: sensors: {}", sensors.names());
     hw::fan_write(&format!("watchdog {}", cfg.watchdog_s)).map_err(|e| {
         format!("cannot control fan ({e}); load thinkpad_acpi with fan_control=1")
     })?;
@@ -63,19 +64,44 @@ fn run(cfg: Config) -> Res<()> {
         signal_hook::flag::register(sig, Arc::clone(&term))?;
     }
 
+    // GPU telemetry on its own thread so a wedged dGPU/NVML call can never
+    // stall fan control. Only polls while a dynamic profile is active.
+    let gpu_wanted = Arc::new(AtomicBool::new(false));
+    let gpu_latest: Arc<Mutex<Option<(GpuSample, Instant)>>> = Arc::new(Mutex::new(None));
+    {
+        let (wanted, latest) = (Arc::clone(&gpu_wanted), Arc::clone(&gpu_latest));
+        std::thread::Builder::new().name("gpu".into()).spawn(move || {
+            let mut gpu: Option<Gpu> = None;
+            loop {
+                if wanted.load(Ordering::Relaxed) {
+                    let g = gpu.get_or_insert_with(Gpu::new);
+                    if let Some(s) = g.sample() {
+                        *latest.lock().unwrap() = Some((s, Instant::now()));
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        })?;
+    }
+
     let interval = Duration::from_millis(cfg.interval_ms.max(200));
     let refresh = Duration::from_secs((cfg.watchdog_s as u64 / 3).max(1));
     let mut ctl = Controller::new();
     let mut meter = PowerMeter::new();
+    let mut boost = Boost::new(cfg.profile("balanced").1.limits());
     let mut applied_profile = String::new();
-    let mut applied_limits = None;
+    let mut applied_limits: Option<tpfand_proto::Limits> = None;
+    let mut logged_boost: Option<(u32, String)> = None;
     let mut last_rapl = Instant::now();
     let mut last_write = Instant::now();
     let mut last_tick = Instant::now();
     let mut written: Option<Fan> = None;
+    let mut cpu_watts = None;
 
     while !term.load(Ordering::Relaxed) {
-        let dt = last_tick.elapsed().as_secs_f64().max(0.001);
+        let dt = last_tick.elapsed().as_secs_f64();
+        let full_tick = dt >= interval.as_secs_f64() * 0.5;
+        let dt = dt.max(0.001);
         last_tick = Instant::now();
 
         let user = {
@@ -84,6 +110,16 @@ fn run(cfg: Config) -> Res<()> {
             sh.user.clone()
         };
 
+        // ---- temperatures
+        let readings = sensors.read();
+        let raw = readings.control;
+        if let Some(t) = raw {
+            ctl.observe(&cfg, t, readings.peak.unwrap_or(t), dt);
+        }
+        if full_tick {
+            cpu_watts = meter.sample().or(cpu_watts);
+        }
+
         // ---- profile + power limits
         let system = hw::system_profile();
         let wanted = user.mode.clone().unwrap_or_else(|| system.clone());
@@ -91,17 +127,53 @@ fn run(cfg: Config) -> Res<()> {
         let limits_for = |p: &str| {
             user.limits.get(p).copied().unwrap_or_else(|| cfg.profile(p).1.limits())
         };
-        let limits = limits_for(name);
-        if name != applied_profile || Some(limits) != applied_limits {
+        let boost_max = boost::max_limits(prof).map(|d| user.boost_max.unwrap_or(d));
+        let profile_changed = name != applied_profile;
+        gpu_wanted.store(prof.boost.is_some(), Ordering::Relaxed);
+        if profile_changed {
+            boost.reset(limits_for(name));
+            ctl.release_hold(&cfg);
+        }
+
+        let mut boost_info = None;
+        let limits = match (&prof.boost, boost_max) {
+            (Some(bcfg), Some(max)) => {
+                let gpu = gpu_latest
+                    .lock()
+                    .unwrap()
+                    .filter(|(_, t)| t.elapsed() < Duration::from_secs(6))
+                    .map(|(s, _)| s);
+                let inp = boost::Inputs { cpu_watts, gpu, temp: ctl.ema, critical: ctl.critical };
+                let l = boost.step(bcfg, limits_for(name), max, &inp, dt, Instant::now());
+                boost_info = Some(boost.info.clone());
+                l
+            }
+            _ => limits_for(name),
+        };
+
+        if profile_changed || Some(limits) != applied_limits {
             hw::apply_rapl(limits);
-            eprintln!(
-                "tpfand: profile {name} ({}) PL1={}W PL2={}W",
-                if user.mode.is_some() { "pinned" } else { "auto" },
-                limits.pl1_w,
-                limits.pl2_w
-            );
-            if name != applied_profile {
-                ctl.release_hold(&cfg);
+            let log = if prof.boost.is_some() {
+                // Only log meaningful boost moves.
+                let r = boost.info.reason.clone();
+                let big = logged_boost.as_ref().is_none_or(|(w, lr)| {
+                    w.abs_diff(limits.pl1_w) >= 10 || *lr != r
+                });
+                if big {
+                    logged_boost = Some((limits.pl1_w, r));
+                }
+                profile_changed || big
+            } else {
+                true
+            };
+            if log {
+                eprintln!(
+                    "tpfand: profile {name} ({}) PL1={}W PL2={}W{}",
+                    if user.mode.is_some() { "pinned" } else { "auto" },
+                    limits.pl1_w,
+                    limits.pl2_w,
+                    boost_info.as_ref().map(|b| format!(" — {}", b.reason)).unwrap_or_default()
+                );
             }
             applied_profile = name.to_string();
             applied_limits = Some(limits);
@@ -114,12 +186,7 @@ fn run(cfg: Config) -> Res<()> {
             last_rapl = Instant::now();
         }
 
-        // ---- temperatures + fan
-        let temps = sensors.read();
-        let raw = temps.iter().map(|(_, t)| *t).reduce(f64::max);
-        if let Some(t) = raw {
-            ctl.observe(&cfg, t, dt);
-        }
+        // ---- fan
         let want = if raw.is_none() || ctl.critical {
             Fan::FullSpeed // no sensors or critical: always safe
         } else {
@@ -135,9 +202,10 @@ fn run(cfg: Config) -> Res<()> {
                 Ok(()) => {
                     if written != Some(want) {
                         eprintln!(
-                            "tpfand: {} (max {:.0}°C, smoothed {:.1}°C{})",
+                            "tpfand: {} (control {:.0}°C, peak {:.0}°C, smoothed {:.1}°C{})",
                             want.cmd(),
                             raw.unwrap_or(f64::NAN),
+                            readings.peak.unwrap_or(f64::NAN),
                             ctl.ema.unwrap_or(f64::NAN),
                             if ctl.critical { ", CRITICAL" } else { "" }
                         );
@@ -159,13 +227,20 @@ fn run(cfg: Config) -> Res<()> {
             fan_level: want.cmd().trim_start_matches("level ").to_string(),
             fan_rpm: sensors.rpm(),
             critical: ctl.critical,
-            temps,
+            temps: readings.display,
             smoothed_temp: ctl.ema,
-            package_watts: meter.sample(),
+            package_watts: cpu_watts,
             limits: cfg.profiles.keys().map(|k| (k.clone(), limits_for(k))).collect(),
             default_limits: default_limits.clone(),
             applied: hw::read_rapl(),
             can_write: false,
+            boost: boost_info,
+            boost_max: cfg
+                .profiles
+                .values()
+                .find_map(boost::max_limits)
+                .map(|d| user.boost_max.unwrap_or(d)),
+            default_boost_max: cfg.profiles.values().find_map(boost::max_limits),
         };
         let (lock, cvar) = &*shared;
         let mut sh = lock.lock().unwrap();

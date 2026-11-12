@@ -48,7 +48,10 @@ impl Tray {
             (Some(s), None) => {
                 let t = s.temps.iter().map(|(_, t)| *t).fold(f64::NAN, f64::max);
                 let rpm = s.fan_rpm.iter().max().copied().unwrap_or(0);
-                let w = s.package_watts.map(|w| format!(" · {w:.0} W")).unwrap_or_default();
+                let mut w = s.package_watts.map(|w| format!(" · {w:.0} W")).unwrap_or_default();
+                if let (Some(_), Some(a)) = (&s.boost, s.applied) {
+                    w += &format!(" · boost PL1 {} W", a.pl1_w);
+                }
                 format!("{t:.0}°C · fan {} ({rpm} rpm){w}", s.fan_level)
             }
         }
@@ -70,7 +73,7 @@ impl ksni::Tray for Tray {
             Some(s) if s.critical => "dialog-warning-symbolic",
             Some(s) => match s.effective_profile.as_str() {
                 "low-power" => "power-profile-power-saver-symbolic",
-                "performance" => "power-profile-performance-symbolic",
+                "performance" | "dynamic" => "power-profile-performance-symbolic",
                 _ => "power-profile-balanced-symbolic",
             },
         }
