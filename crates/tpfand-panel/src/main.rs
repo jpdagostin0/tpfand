@@ -3,6 +3,7 @@
 //!   tpfand-panel            run the tray icon (autostart this)
 //!   tpfand-panel --window   open the control window directly
 
+mod badge;
 mod tray;
 mod window;
 

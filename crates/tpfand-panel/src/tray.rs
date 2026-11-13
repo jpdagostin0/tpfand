@@ -4,12 +4,14 @@ use ksni::blocking::TrayMethods;
 use ksni::menu::{MenuItem, RadioGroup, RadioItem, StandardItem};
 use std::process::{Child, Command};
 use std::time::Duration;
+use crate::badge::{self, Badge};
 use tpfand_proto::{Client, FanMode, PROFILES, Request, Status, profile_label};
 
 struct Tray {
     status: Option<Status>,
     error: Option<String>,
     window: Option<Child>,
+    badge: Badge,
     quit: bool,
 }
 
@@ -26,6 +28,7 @@ impl Tray {
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.badge.update(self.status.as_ref());
     }
 
     fn open_window(&mut self) {
@@ -46,7 +49,7 @@ impl Tray {
             (_, Some(e)) => format!("tpfand unavailable: {e}"),
             (None, None) => "connecting…".into(),
             (Some(s), None) => {
-                let t = s.temps.iter().map(|(_, t)| *t).fold(f64::NAN, f64::max);
+                let t = badge::control_temp(s).unwrap_or(f64::NAN);
                 let rpm = s.fan_rpm.iter().max().copied().unwrap_or(0);
                 let mut w = s.package_watts.map(|w| format!(" · {w:.0} W")).unwrap_or_default();
                 if let (Some(_), Some(a)) = (&s.boost, s.applied) {
@@ -68,6 +71,9 @@ impl ksni::Tray for Tray {
     }
 
     fn icon_name(&self) -> String {
+        if let (Some(path), None) = (self.badge.path(), &self.error) {
+            return path;
+        }
         match &self.status {
             None => "dialog-warning-symbolic",
             Some(s) if s.critical => "dialog-warning-symbolic",
@@ -172,7 +178,7 @@ impl ksni::Tray for Tray {
 }
 
 pub fn run() {
-    let tray = Tray { status: None, error: None, window: None, quit: false };
+    let tray = Tray { status: None, error: None, window: None, badge: Badge::new(), quit: false };
     // Autostart can race the AppIndicator extension registering the
     // StatusNotifierWatcher; let ksni wait for it instead of exiting.
     let handle = match tray.assume_sni_available(true).spawn() {
@@ -208,6 +214,7 @@ pub fn run() {
                         t.error = Some(e.to_string());
                     }
                 }
+                t.badge.update(t.status.as_ref());
                 if let Some(c) = &mut t.window {
                     if !matches!(c.try_wait(), Ok(None)) {
                         t.window = None;
