@@ -14,10 +14,12 @@ use tpfand_proto::Status;
 const W: u32 = 70;
 const H: u32 = 16;
 
-const GREEN: &str = "#73d216";
-const YELLOW: &str = "#edd400";
-const RED: &str = "#ef2929";
-const GREY: &str = "#9a9996";
+// Catppuccin Mocha, matching the desktop bar: normal readings use the bar's
+// plain text colour; only warm/hot readings get a colour (yellow / red).
+const GREEN: &str = "#cdd6f4";
+const YELLOW: &str = "#f9e2af";
+const RED: &str = "#f38ba8";
+const GREY: &str = "#6c7086";
 
 /// Temperature colour (°C). Core Ultra TjMax is 110°C; tpfand's critical
 /// release point is 85°C.
