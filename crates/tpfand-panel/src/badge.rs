@@ -65,7 +65,10 @@ pub fn svg(s: &Status) -> String {
         None => ("--°".into(), GREY),
     };
     let (watts, wc) = match s.package_watts {
-        Some(w) => (format!("{:.0}W", w), watts_color(w, s.applied.map(|a| a.pl1_w))),
+        Some(w) => (
+            format!("{:.0}W", w),
+            watts_color(w, s.applied.map(|a| a.pl1_w)),
+        ),
         None => ("--W".into(), GREY),
     };
     // Right-aligned columns at fixed positions so the icon doesn't jitter as
@@ -94,7 +97,12 @@ impl Badge {
             let _ = std::fs::remove_dir_all(d);
             std::fs::create_dir_all(d).is_ok()
         });
-        Badge { dir, last_svg: String::new(), path: None, serial: 0 }
+        Badge {
+            dir,
+            last_svg: String::new(),
+            path: None,
+            serial: 0,
+        }
     }
 
     /// Current image path, if any.
@@ -116,7 +124,10 @@ impl Badge {
         self.serial += 1;
         let path = dir.join(format!("badge-{}-{}.svg", std::process::id(), self.serial));
         let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, &svg).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        if std::fs::write(&tmp, &svg)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .is_err()
+        {
             let _ = std::fs::remove_file(&tmp);
             return;
         }
@@ -151,7 +162,10 @@ mod tests {
         Status {
             temps: temps.iter().map(|(l, t)| (l.to_string(), *t)).collect(),
             package_watts: watts,
-            applied: Some(Limits { pl1_w: 45, pl2_w: 90 }),
+            applied: Some(Limits {
+                pl1_w: 45,
+                pl2_w: 90,
+            }),
             ..Default::default()
         }
     }
@@ -159,7 +173,11 @@ mod tests {
     #[test]
     fn uses_control_temp_not_hottest_core() {
         let s = status(
-            &[("CPU core average", 55.0), ("CPU hottest core", 100.0), ("GPU", 48.0)],
+            &[
+                ("CPU core average", 55.0),
+                ("CPU hottest core", 100.0),
+                ("GPU", 48.0),
+            ],
             Some(20.0),
         );
         assert_eq!(control_temp(&s), Some(55.0));

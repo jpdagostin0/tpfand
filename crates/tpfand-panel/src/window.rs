@@ -17,8 +17,12 @@ pub fn run() -> Result<(), String> {
             .with_min_inner_size([380.0, 420.0]),
         ..Default::default()
     };
-    eframe::run_native("tpfand", options, Box::new(|_cc| Ok(Box::new(Panel::new()))))
-        .map_err(|e| e.to_string())
+    eframe::run_native(
+        "tpfand",
+        options,
+        Box::new(|_cc| Ok(Box::new(Panel::new()))),
+    )
+    .map_err(|e| e.to_string())
 }
 
 struct Panel {
@@ -33,7 +37,14 @@ struct Panel {
 
 impl Panel {
     fn new() -> Self {
-        Panel { client: None, status: None, error: None, last_poll: None, edits: BTreeMap::new(), boost_edit: None }
+        Panel {
+            client: None,
+            status: None,
+            error: None,
+            last_poll: None,
+            edits: BTreeMap::new(),
+            boost_edit: None,
+        }
     }
 
     fn with_client<T>(&mut self, f: impl FnOnce(&mut Client) -> std::io::Result<T>) -> Option<T> {
@@ -77,7 +88,10 @@ impl Panel {
 
 impl eframe::App for Panel {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if self.last_poll.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+        if self
+            .last_poll
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+        {
             self.poll();
         }
         ui.ctx().request_repaint_after(Duration::from_secs(1));
@@ -93,52 +107,68 @@ impl Panel {
         ui.add_space(6.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.label(egui::RichText::new("Dynamic Boost").strong());
-            egui::Grid::new("boost").num_columns(2).spacing([16.0, 2.0]).show(ui, |ui| {
-                ui.label("State");
-                ui.label(&b.reason);
-                ui.end_row();
-                if let Some(a) = s.applied {
-                    ui.label("CPU limits now");
-                    ui.label(format!("PL1 {} W · PL2 {} W (ceiling {} W)", a.pl1_w, a.pl2_w, b.ceiling_w));
+            egui::Grid::new("boost")
+                .num_columns(2)
+                .spacing([16.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label("State");
+                    ui.label(&b.reason);
                     ui.end_row();
-                }
-                if let Some(w) = b.cpu_watts {
-                    ui.label("CPU draw");
-                    ui.label(format!("{w:.1} W"));
-                    ui.end_row();
-                }
-                ui.label("GPU");
-                match b.gpu_watts {
-                    None => ui.label("no telemetry (treated as idle)"),
-                    Some(w) => {
-                        let mut t = format!("{w:.0} W · {}% util", b.gpu_util.unwrap_or(0));
-                        if let Some(c) = b.gpu_temp {
-                            t += &format!(" · {c:.0} °C");
-                        }
-                        if b.gpu_thermal_throttled {
-                            t += " · thermal throttling";
-                        } else if b.gpu_power_capped {
-                            t += " · at power cap";
-                        }
-                        ui.label(t)
+                    if let Some(a) = s.applied {
+                        ui.label("CPU limits now");
+                        ui.label(format!(
+                            "PL1 {} W · PL2 {} W (ceiling {} W)",
+                            a.pl1_w, a.pl2_w, b.ceiling_w
+                        ));
+                        ui.end_row();
                     }
-                };
-                ui.end_row();
-            });
+                    if let Some(w) = b.cpu_watts {
+                        ui.label("CPU draw");
+                        ui.label(format!("{w:.1} W"));
+                        ui.end_row();
+                    }
+                    ui.label("GPU");
+                    match b.gpu_watts {
+                        None => ui.label("no telemetry (treated as idle)"),
+                        Some(w) => {
+                            let mut t = format!("{w:.0} W · {}% util", b.gpu_util.unwrap_or(0));
+                            if let Some(c) = b.gpu_temp {
+                                t += &format!(" · {c:.0} °C");
+                            }
+                            if b.gpu_thermal_throttled {
+                                t += " · thermal throttling";
+                            } else if b.gpu_power_capped {
+                                t += " · at power cap";
+                            }
+                            ui.label(t)
+                        }
+                    };
+                    ui.end_row();
+                });
 
             if let (Some(cur), def) = (s.boost_max, s.default_boost_max) {
                 let mut edit = self.boost_edit.unwrap_or(cur);
                 ui.add_space(4.0);
                 ui.label("Boost ceiling");
                 ui.add_enabled_ui(s.can_write, |ui| {
-                    ui.add(egui::Slider::new(&mut edit.pl1_w, LIMIT_MIN..=LIMIT_MAX).text("max PL1 W"));
-                    ui.add(egui::Slider::new(&mut edit.pl2_w, LIMIT_MIN..=LIMIT_MAX).text("max PL2 W"));
+                    ui.add(
+                        egui::Slider::new(&mut edit.pl1_w, LIMIT_MIN..=LIMIT_MAX).text("max PL1 W"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut edit.pl2_w, LIMIT_MIN..=LIMIT_MAX).text("max PL2 W"),
+                    );
                     edit.pl2_w = edit.pl2_w.max(edit.pl1_w);
                     ui.horizontal(|ui| {
-                        if ui.add_enabled(edit != cur, egui::Button::new("Apply")).clicked() {
+                        if ui
+                            .add_enabled(edit != cur, egui::Button::new("Apply"))
+                            .clicked()
+                        {
                             self.send(Request::SetBoostMax { limits: Some(edit) });
                         }
-                        if ui.add_enabled(Some(cur) != def, egui::Button::new("Reset to default")).clicked() {
+                        if ui
+                            .add_enabled(Some(cur) != def, egui::Button::new("Reset to default"))
+                            .clicked()
+                        {
                             self.send(Request::SetBoostMax { limits: None });
                             if let Some(d) = def {
                                 edit = d;
@@ -168,37 +198,40 @@ impl Panel {
 
         // ------------------------------------------------------- status
         ui.heading("Status");
-        egui::Grid::new("status").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-            for (label, t) in &s.temps {
-                ui.label(label);
-                ui.label(format!("{t:.0} °C"));
+        egui::Grid::new("status")
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                for (label, t) in &s.temps {
+                    ui.label(label);
+                    ui.label(format!("{t:.0} °C"));
+                    ui.end_row();
+                }
+                if let Some(t) = s.smoothed_temp {
+                    ui.label("Fan control temp");
+                    ui.label(format!("{t:.1} °C"));
+                    ui.end_row();
+                }
+                ui.label("Fan");
+                let rpm: Vec<_> = s.fan_rpm.iter().map(|r| r.to_string()).collect();
+                let txt = format!("level {} · {} rpm", s.fan_level, rpm.join(" / "));
+                if s.critical {
+                    ui.colored_label(egui::Color32::LIGHT_RED, format!("{txt}  — CRITICAL"));
+                } else {
+                    ui.label(txt);
+                }
                 ui.end_row();
-            }
-            if let Some(t) = s.smoothed_temp {
-                ui.label("Fan control temp");
-                ui.label(format!("{t:.1} °C"));
-                ui.end_row();
-            }
-            ui.label("Fan");
-            let rpm: Vec<_> = s.fan_rpm.iter().map(|r| r.to_string()).collect();
-            let txt = format!("level {} · {} rpm", s.fan_level, rpm.join(" / "));
-            if s.critical {
-                ui.colored_label(egui::Color32::LIGHT_RED, format!("{txt}  — CRITICAL"));
-            } else {
-                ui.label(txt);
-            }
-            ui.end_row();
-            if let Some(w) = s.package_watts {
-                ui.label("CPU package power");
-                ui.label(format!("{w:.1} W"));
-                ui.end_row();
-            }
-            if let Some(a) = s.applied {
-                ui.label("Applied limits");
-                ui.label(format!("PL1 {} W · PL2 {} W", a.pl1_w, a.pl2_w));
-                ui.end_row();
-            }
-        });
+                if let Some(w) = s.package_watts {
+                    ui.label("CPU package power");
+                    ui.label(format!("{w:.1} W"));
+                    ui.end_row();
+                }
+                if let Some(a) = s.applied {
+                    ui.label("Applied limits");
+                    ui.label(format!("PL1 {} W · PL2 {} W", a.pl1_w, a.pl2_w));
+                    ui.end_row();
+                }
+            });
 
         ui.separator();
 
@@ -209,7 +242,10 @@ impl Panel {
             ui.radio_value(
                 &mut sel,
                 None,
-                format!("Auto — follow system power mode ({})", profile_label(&s.system_profile)),
+                format!(
+                    "Auto — follow system power mode ({})",
+                    profile_label(&s.system_profile)
+                ),
             );
             for p in PROFILES {
                 ui.radio_value(&mut sel, Some(p.to_string()), profile_label(p));
@@ -248,22 +284,19 @@ impl Panel {
                 self.send(Request::SetFan { fan });
             }
         });
-        ui.label(
-            egui::RichText::new("Critical temperatures always force full speed.").weak(),
-        );
+        ui.label(egui::RichText::new("Critical temperatures always force full speed.").weak());
 
         ui.separator();
 
         // ------------------------------------------------------- limits
         ui.heading("Power limits (TDP)");
         ui.label(
-            egui::RichText::new(
-                "PL1 = sustained package power, PL2 = short turbo bursts.",
-            )
-            .weak(),
+            egui::RichText::new("PL1 = sustained package power, PL2 = short turbo bursts.").weak(),
         );
         for p in PROFILES {
-            let Some(current) = s.limits.get(*p).copied() else { continue };
+            let Some(current) = s.limits.get(*p).copied() else {
+                continue;
+            };
             let default = s.default_limits.get(*p).copied();
             let mut edit = *self.edits.get(*p).unwrap_or(&current);
             let active = s.effective_profile == *p;
@@ -285,15 +318,24 @@ impl Panel {
                 }
                 ui.horizontal(|ui| {
                     let changed = edit != current;
-                    if ui.add_enabled(changed, egui::Button::new("Apply")).clicked() {
+                    if ui
+                        .add_enabled(changed, egui::Button::new("Apply"))
+                        .clicked()
+                    {
                         self.send(Request::SetLimits {
                             profile: p.to_string(),
                             limits: Some(edit),
                         });
                     }
                     let is_default = Some(current) == default;
-                    if ui.add_enabled(!is_default, egui::Button::new("Reset to default")).clicked() {
-                        self.send(Request::SetLimits { profile: p.to_string(), limits: None });
+                    if ui
+                        .add_enabled(!is_default, egui::Button::new("Reset to default"))
+                        .clicked()
+                    {
+                        self.send(Request::SetLimits {
+                            profile: p.to_string(),
+                            limits: None,
+                        });
                         if let Some(d) = default {
                             edit = d;
                         }

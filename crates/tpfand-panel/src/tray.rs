@@ -1,10 +1,10 @@
 //! Tray icon: quick mode / fan switching, opens the egui window.
 
+use crate::badge::{self, Badge};
 use ksni::blocking::TrayMethods;
 use ksni::menu::{MenuItem, RadioGroup, RadioItem, StandardItem};
 use std::process::{Child, Command};
 use std::time::Duration;
-use crate::badge::{self, Badge};
 use tpfand_proto::{Client, FanMode, PROFILES, Request, Status, profile_label};
 
 struct Tray {
@@ -31,6 +31,18 @@ impl Tray {
         self.badge.update(self.status.as_ref());
     }
 
+    fn toggle_window(&mut self) {
+        if let Some(child) = &mut self.window {
+            if matches!(child.try_wait(), Ok(None)) {
+                let _ = child.kill();
+                let _ = child.wait();
+                self.window = None;
+                return;
+            }
+        }
+        self.open_window();
+    }
+
     fn open_window(&mut self) {
         if let Some(child) = &mut self.window {
             if matches!(child.try_wait(), Ok(None)) {
@@ -51,7 +63,10 @@ impl Tray {
             (Some(s), None) => {
                 let t = badge::control_temp(s).unwrap_or(f64::NAN);
                 let rpm = s.fan_rpm.iter().max().copied().unwrap_or(0);
-                let mut w = s.package_watts.map(|w| format!(" · {w:.0} W")).unwrap_or_default();
+                let mut w = s
+                    .package_watts
+                    .map(|w| format!(" · {w:.0} W"))
+                    .unwrap_or_default();
                 if let (Some(_), Some(a)) = (&s.boost, s.applied) {
                     w += &format!(" · boost PL1 {} W", a.pl1_w);
                 }
@@ -95,12 +110,17 @@ impl ksni::Tray for Tray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        self.open_window();
+        self.toggle_window();
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items: Vec<MenuItem<Self>> = vec![
-            StandardItem { label: self.summary(), enabled: false, ..Default::default() }.into(),
+            StandardItem {
+                label: self.summary(),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
         ];
 
@@ -150,7 +170,10 @@ impl ksni::Tray for Tray {
                 }),
                 options: FANS
                     .iter()
-                    .map(|(_, l)| RadioItem { label: (*l).into(), ..Default::default() })
+                    .map(|(_, l)| RadioItem {
+                        label: (*l).into(),
+                        ..Default::default()
+                    })
                     .collect(),
             }
             .into(),
@@ -178,7 +201,13 @@ impl ksni::Tray for Tray {
 }
 
 pub fn run() {
-    let tray = Tray { status: None, error: None, window: None, badge: Badge::new(), quit: false };
+    let tray = Tray {
+        status: None,
+        error: None,
+        window: None,
+        badge: Badge::new(),
+        quit: false,
+    };
     // Autostart can race the AppIndicator extension registering the
     // StatusNotifierWatcher; let ksni wait for it instead of exiting.
     let handle = match tray.assume_sni_available(true).spawn() {
